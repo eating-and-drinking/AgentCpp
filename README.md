@@ -1,15 +1,6 @@
 # agentcpp
 
-A high-performance C++20 rewrite of the [cc-haha](https://github.com/NanmiCoder/cc-haha) AI coding agent (itself based on Claude Code), extended with a hybrid memory engine (BM25 + graph + optional embeddings) and a training-free metacognition layer (MERIT).
-
-## Why C++?
-
-| Metric | TypeScript/Bun | C++ |
-|--------|----------------|-----|
-| Cold-start time | ~500 ms JIT warmup | <10 ms native |
-| Memory baseline | ~150 MB V8 heap | ~8 MB |
-| Tool execution overhead | event-loop scheduling | zero-copy POSIX |
-| Binary distribution | requires Bun runtime | single static binary |
+A high-performance C++20 agent: streaming Anthropic API client, full Claude Code-style tool set, a hybrid memory engine (BM25 + graph + optional embeddings), and a training-free metacognition layer (MERIT). Ships as a single static binary with a FTXUI terminal UI.
 
 ## Features
 
@@ -295,20 +286,6 @@ The `Computer` tool exposes coarse screen control via shell-out: `screenshot`, `
 
 Screenshots are base64-encoded and sent back to the model as `image` content blocks inside the `tool_result`, so the model can see them directly. Pass `--computer-use` on the CLI to enable the `anthropic-beta: computer-use-2024-10-22` header that the model requires for screen-aware behaviour.
 
-## Differences from cc-haha (TypeScript)
-
-| Feature | cc-haha (TS) | agentcpp |
-|---------|--------------|----------|
-| Runtime | Bun + V8 | Native binary |
-| TUI | React + Ink | FTXUI |
-| MCP servers | ✓ | ✓ |
-| Multi-agent | ✓ | ✓ |
-| Channels | ✓ | ✓ |
-| Computer Use | ✓ | ✓ |
-| Skills system | ✓ | ✓ |
-| Memory system | text-file store | BM25 + graph + optional embeddings (RRF fusion) |
-| Metacognition | — | MERIT (SelfBelief / CoTMonitor / SelfModel / SchemaReviser) |
-
 ## License
 
-Based on Claude Code source code (c) Anthropic. For educational and research use only.
+For educational and research use only.
