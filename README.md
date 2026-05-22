@@ -1,22 +1,32 @@
 # agentcpp
 
-A high-performance C++20 agent: streaming Anthropic API client, full Claude Code-style tool set, a hybrid memory engine (BM25 + graph + optional embeddings), and a training-free metacognition layer (MERIT). Ships as a single static binary with a FTXUI terminal UI.
+A high-performance C++20 **Universal Agent Runtime**. Persona-driven tool sets,
+Plan-Act-Reflect agent loop, hybrid memory + MERIT metacognition, multimodal
+attachments with capability-based provider downgrade. Ships as a single
+static binary with a FTXUI terminal UI.
 
 ## Features
 
-- **Streaming API client** — libcurl SSE parser with zero-copy event dispatch
-- **Claude Code tool set** — `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`
-- **FTXUI terminal UI** — reactive, component-based TUI (same feel as React + Ink)
-- **Headless / `--print` mode** — pipe-friendly non-interactive output
-- **Skills system** — load `SKILL.md` instruction sets from one or more roots
-- **MCP servers** — spawn any Model Context Protocol server and expose its tools
-- **Multi-agent** — `Task` tool spawns bounded-depth sub-agents
-- **Channels** — in-process pub/sub bus for agent ↔ sub-agent coordination
-- **Computer Use** — coarse screen control (screenshot, mouse, keyboard, scroll)
-- **Hybrid memory engine** — BM25 lexical + graph activation + optional HTTP embeddings, fused via RRF; pluggable Claude / heuristic providers
-- **MERIT metacognition** — Bayesian self-belief, CoT process monitoring, structured self-model, schema revision; training-free
-- **Any compatible API** — OpenRouter, MiniMax, local proxies via `ANTHROPIC_BASE_URL`
-- **Zero runtime deps** — single binary after `cmake --build`
+- **Personas** -- 5 built-in (general / researcher / office / data / coder),
+  user-extensible via `~/.agentcpp/personas/*.yaml` overlay
+- **Toolsets** -- 9 groups (core / files / code / web / doc / data / memory /
+  computer / mcp) filtered per persona; `--toolset` / `--disable-toolset`
+- **Plan-Act-Reflect loop** -- Planner emits a structured PlanGraph via a
+  `plan` tool; Reflector revises mid-run; MERIT runs alongside
+- **Multimodal attachments** -- `--attach` routes files into Image/Audio/
+  Document/Data blocks; auto-downgraded per model capability
+- **Streaming API client** -- libcurl SSE parser with zero-copy event dispatch
+- **Skills system** -- load `SKILL.md` instruction sets from one or more roots
+- **MCP servers** -- spawn any Model Context Protocol server and expose its tools
+- **Multi-agent** -- `Task` tool spawns bounded-depth sub-agents
+- **Channels** -- in-process pub/sub bus for agent <-> sub-agent coordination
+- **Computer Use** -- coarse screen control (screenshot, mouse, keyboard, scroll)
+- **Hybrid memory engine** -- BM25 lexical + graph activation + optional HTTP
+  embeddings, fused via RRF; pluggable Claude / heuristic providers
+- **MERIT metacognition** -- Bayesian self-belief, CoT process monitoring,
+  structured self-model, schema revision; training-free
+- **Any compatible API** -- OpenRouter, MiniMax, local proxies via `ANTHROPIC_BASE_URL`
+- **Zero runtime deps** -- single binary after `cmake --build`
 
 ## Build
 
@@ -286,6 +296,247 @@ The `Computer` tool exposes coarse screen control via shell-out: `screenshot`, `
 
 Screenshots are base64-encoded and sent back to the model as `image` content blocks inside the `tool_result`, so the model can see them directly. Pass `--computer-use` on the CLI to enable the `anthropic-beta: computer-use-2024-10-22` header that the model requires for screen-aware behaviour.
 
+## Personas
+
+`agentcpp` ships with five built-in **personas** — reusable "stances" that
+combine a mission, a style guide, a default toolset, and optional default
+skills. They turn the binary from a single coding assistant into a
+multi-role runtime: `agentcpp researcher`, `agentcpp office`, etc.
+
+| id           | display name        | toolsets                                | default skills              |
+|--------------|---------------------|------------------------------------------|-----------------------------|
+| `general`    | General Agent       | core, web, files, doc, data, memory     | —                           |
+| `researcher` | Research Analyst    | core, web, doc, memory                  | —                           |
+| `office`     | Office Assistant    | core, files, doc, memory                | docx, xlsx, pptx, pdf       |
+| `data`       | Data Analyst        | core, files, data, code, memory         | —                           |
+| `coder`      | Coding Assistant    | core, files, code, memory               | —  (legacy default)         |
+
+When no persona is selected, `agentcpp` defaults to `coder` for backwards
+compatibility with pre-persona behavior.
+
+### Selecting a persona
+
+```bash
+agentcpp researcher -p "Compare React vs Vue ecosystems in 2026"
+agentcpp --persona office --attach memo.md "Convert to docx"
+agentcpp --list-personas              # show all (built-in + overlays)
+```
+
+### YAML overlay
+
+Built-in personas are hard-coded; users can override any of them — or add
+brand-new ones — by dropping YAML files into the overlay directory:
+
+```
+$AGENTCPP_PERSONA_DIR     (if set, takes precedence)
+$XDG_CONFIG_HOME/agentcpp/personas      (Linux/macOS)
+$HOME/.agentcpp/personas                (Unix fallback)
+%APPDATA%\agentcpp\personas             (Windows)
+```
+
+Schema (subset of YAML; same parser used at runtime):
+
+```yaml
+id: launch-analyst
+display_name: Product Launch Analyst
+
+mission: |
+  You are a product launch analyst. Track competitor releases, summarize
+  community sentiment, and produce launch briefings.
+
+style: |
+  Cite every claim with [n]. Distinguish primary from secondary sources.
+
+toolsets: [core, web, doc, memory]
+default_skills: []
+```
+
+Drop this into `~/.agentcpp/personas/launch-analyst.yaml` and the
+persona becomes reachable via `--persona launch-analyst`.
+
+## Toolsets
+
+Tools are grouped into **toolsets** by `Tool::category()`. Personas declare
+which toolsets they expose to the model; CLI flags can additively enable
+or subtractively disable groups on top of the persona's default.
+
+| toolset   | tools                                                                       |
+|-----------|-----------------------------------------------------------------------------|
+| core      | `Skill`, `Task`, `ChannelPublish`/`Read`/`List`                             |
+| files     | `Read`, `Write`, `Edit`, `Glob`, `Grep`                                     |
+| code      | `Bash`                                                                      |
+| web       | `WebFetch`, `WebSearch`                                                     |
+| doc       | `DocxRead`/`Write`, `PdfRead`, `XlsxRead`/`Write`, `PptxRead`/`Write`       |
+| data      | `CsvRead`, `CsvWrite`, `SqlQuery`, `Chart`                                  |
+| memory    | `MemoryRetain`, `MemoryRecall`, `MemoryReflect`, `MemoryList`               |
+| computer  | `Computer`                                                                  |
+| mcp       | every tool exposed by spawned MCP servers (one virtual member per server)   |
+
+```bash
+agentcpp --list-toolsets                           # show groups + members
+agentcpp office --toolset code "fix Python in this doc"
+agentcpp coder --disable-toolset code "audit the codebase, no shell"
+```
+
+### Web tools
+
+`WebFetch` uses libcurl directly. `WebSearch` picks a provider from the
+first of these env vars that is set:
+
+| provider | env var          | endpoint                                                     |
+|----------|------------------|--------------------------------------------------------------|
+| brave    | `BRAVE_API_KEY`  | `api.search.brave.com/res/v1/web/search`                     |
+| serper   | `SERPER_API_KEY` | `google.serper.dev/search`                                   |
+| bing     | `BING_API_KEY`   | `api.bing.microsoft.com/v7.0/search`                         |
+| tavily   | `TAVILY_API_KEY` | `api.tavily.com/search`                                      |
+
+Force a specific provider with `WEB_SEARCH_PROVIDER=brave`. With no key,
+`WebSearch` is still registered but returns a clear error at call time.
+
+### Doc tools
+
+The doc group shells out to the Python scripts shipped with the matching
+skill (`skills/docx/scripts/read.py`, `skills/pdf/scripts/read.py`, ...).
+Tools detect missing `python3` or missing scripts at call time and emit
+an actionable error rather than crashing.
+
+### SQL tool
+
+`SqlQuery` embeds SQLite when CMake finds `libsqlite3-dev` at configure
+time. Without it the tool stays visible but reports unavailable.
+Enable with `cmake -B build -DAGENTCPP_WITH_SQLITE=ON`.
+
+## Attachments & multimodal
+
+Pass files into the agent's first user message with `--attach <path>`
+(repeatable). MIME is inferred from the extension and routed into the
+appropriate content block:
+
+| extension                           | content block               |
+|-------------------------------------|------------------------------|
+| `.png .jpg .jpeg .webp .gif`        | `ImageBlock`                 |
+| `.mp3 .wav .ogg`                    | `AudioBlock`                 |
+| `.pdf .docx`                        | `DocumentBlock`              |
+| `.csv .tsv`                         | `DataBlock` (parsed table)   |
+| `.json`                             | `DataBlock` (raw)            |
+| `.txt .md` (or anything else)       | `TextBlock`                  |
+
+```bash
+agentcpp researcher --attach paper.pdf "Summarize the methodology"
+agentcpp data --attach sales.csv "Plot monthly revenue by region"
+agentcpp office --attach screenshot.png "Describe what's in this UI"
+```
+
+### Capability-based downgrade
+
+Models accept different content types. Right before sending each request,
+`api::Capabilities::downgradeRequest()` rewrites blocks the active model
+can't consume:
+
+| input              | Claude    | GPT-4o    | Gemini 2.x | Ollama / Llama |
+|--------------------|-----------|-----------|------------|----------------|
+| `ImageBlock`       | native    | native    | native     | text fallback  |
+| `AudioBlock`       | downgrade | native    | native     | downgrade      |
+| `DocumentBlock`    | native    | downgrade | native     | downgrade      |
+| `DataBlock`        | text      | text      | text       | text           |
+
+Downgrade rules:
+
+- `ImageBlock` -> `TextBlock` placeholder
+- `AudioBlock` -> use `transcript` field if set, else placeholder
+- `DocumentBlock` -> use `extracted_text` field if set, else placeholder
+
+Provide a transcript or pre-extracted text when constructing blocks
+yourself to make downgrades useful instead of cosmetic.
+
+### Tools that return rich output
+
+`ToolCallResult::okMulti(text, images[], data[])` lets a tool emit a
+mix of text + extra images + table data in one call. `Chart` uses this
+to return the rendered PNG alongside the saved path so the model sees
+the graph directly; `SqlQuery` can return both a markdown table and a
+structured `DataBlock` for downstream tools.
+
+## Plan-Act-Reflect
+
+For complex requests, `agentcpp` runs a three-phase loop instead of
+diving straight into the agent turn loop:
+
+```
+       user input
+            |
+            v
+   +-----------------+      PlanGraph (steps + acceptance + tool hints)
+   |    Planner      | ---> injected into system prompt as ## Plan
+   +--------+--------+
+            | emit PlanReady
+            v
+   +-----------------+   every reflect_every turns,
+   |    Act (turn)   | <--- Reflector reviews progress and may
+   +--------+--------+      trigger Planner.replan()
+            |
+            v
+   +-----------------+      step updates + propositions -> MERIT
+   |    Reflect      |
+   +--------+--------+
+            v
+         answer
+```
+
+### When does the Planner run?
+
+Mode is controlled by `--plan / --no-plan / --plan-only`. The default is
+`Auto`, which fires the Planner when any of these is true:
+
+- the active persona sets `extras.plan_by_default: true`
+  (built-in: `researcher`, `office`)
+- the prompt is longer than 240 characters
+- the prompt contains multi-step markers (`then`, `after that`,
+  `step N`, Chinese 然后/接着/最后, etc.)
+- the prompt contains >= 3 action verbs from a small whitelist
+
+The Planner calls the model with a single `plan` tool whose input schema
+mirrors `PlanGraph`. The model's tool-use input is parsed directly --
+no free-form JSON extraction.
+
+### Inspecting and revising
+
+- `agentcpp plan -p "..."` (or `--plan-only`) produces the plan and exits.
+- The Reflector runs every `--reflect-every N` turns (default 4; set 0
+  to disable). It can mark step statuses, record `propositions` into the
+  MERIT `SelfModelStore`, and request a `replan()` when the plan is
+  actively wrong (not merely incomplete).
+- The TUI receives `PlanReady`, `PlanRevised`, and `ReflectionDone`
+  events; headless mode prints the plan markdown to the final response
+  when `--plan-only` is set.
+
+### CLI cheatsheet
+
+```bash
+# Force a plan
+agentcpp researcher --plan -p "Compare React, Vue, Svelte in 2026"
+
+# Plan only -- useful for sanity-checking decomposition
+agentcpp plan -p "Migrate our Python 3.9 codebase to 3.12"
+
+# Skip planning entirely for quick Q&A
+agentcpp --no-plan -p "What time is it in Tokyo?"
+
+# Tune reflection cadence
+agentcpp data --reflect-every 2 --attach sales.csv "Find anomalies"
+agentcpp coder --reflect-every 0 "Quick patch for issue #42"
+
+# Cap the plan size
+agentcpp --max-plan-steps 6 -p "Build a CLI todo app in Python"
+```
+
+The Plan layer is additive to the existing MERIT metacognition stack:
+MERIT's `MetaController` still makes per-iteration act/reflect/decompose
+decisions on heuristic grounds; the new `Reflector` provides the
+explicit prompt-driven reflection path and writes durable propositions
+back into MERIT's `SelfModelStore`. The two coexist.
+
 ## License
 
 For educational and research use only.
+

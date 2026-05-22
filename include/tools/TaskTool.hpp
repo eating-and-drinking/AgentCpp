@@ -6,15 +6,6 @@ namespace agentcpp::agent    { struct QueryConfig; }
 
 namespace agentcpp::tools {
 
-// Task tool: spawns a sub-agent that runs an independent conversation against
-// the same Claude API and ToolRegistry, then returns its final text response
-// to the parent agent.
-//
-// Sub-agent runs are silent (events are dropped — they don't reach the
-// parent's TUI). Recursion is bounded by ToolContext::max_subagent_depth.
-//
-// All wiring (client, registry, model, max_tokens, etc.) is captured at
-// construction time from the same values the top-level agent uses.
 class TaskTool : public Tool {
 public:
     TaskTool(std::shared_ptr<agentcpp::api::ClaudeClient> client,
@@ -30,6 +21,7 @@ public:
     {}
 
     std::string name()        const override { return "Task"; }
+    std::string category()    const override { return "core"; }
     std::string description() const override;
     json        inputSchema() const override;
 

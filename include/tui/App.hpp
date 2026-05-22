@@ -11,6 +11,7 @@
 
 namespace agentcpp::skills { class SkillRegistry; }
 namespace agentcpp::memory { class MemoryEngine;  }
+namespace agentcpp::agent  { class PersonaRegistry; }
 
 namespace agentcpp::tui {
 
@@ -29,8 +30,10 @@ struct AppConfig {
     QueryConfig query;
     std::string initial_prompt;
     bool        print_mode = false;
-    const agentcpp::skills::SkillRegistry* skills = nullptr;
-    const agentcpp::memory::MemoryEngine*  memory = nullptr;
+    const agentcpp::skills::SkillRegistry*  skills   = nullptr;
+    const agentcpp::memory::MemoryEngine*   memory   = nullptr;
+    const agentcpp::agent::PersonaRegistry* personas = nullptr;
+    std::vector<agentcpp::api::ContentBlock> attachments;
 };
 
 class App {

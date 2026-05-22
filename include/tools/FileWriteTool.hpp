@@ -6,6 +6,7 @@ namespace agentcpp::tools {
 class FileWriteTool : public Tool {
 public:
     std::string name()        const override { return "Write"; }
+    std::string category()    const override { return "files"; }
     std::string description() const override;
     json        inputSchema() const override;
 

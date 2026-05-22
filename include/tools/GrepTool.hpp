@@ -6,6 +6,7 @@ namespace agentcpp::tools {
 class GrepTool : public Tool {
 public:
     std::string name()        const override { return "Grep"; }
+    std::string category()    const override { return "files"; }
     std::string description() const override;
     json        inputSchema() const override;
 

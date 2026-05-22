@@ -6,15 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Build type
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG   "-g -O0 -DDEBUG")
 
-# ── Dependencies via FetchContent ──────────────────────────────────────────────
 include(FetchContent)
 
 FetchContent_Declare(
@@ -23,32 +21,45 @@ FetchContent_Declare(
   GIT_TAG        v3.11.3
   GIT_SHALLOW    TRUE
 )
-
 FetchContent_Declare(
   CLI11
   GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
   GIT_TAG        v2.4.2
   GIT_SHALLOW    TRUE
 )
-
 FetchContent_Declare(
   ftxui
   GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
   GIT_TAG        v5.0.0
   GIT_SHALLOW    TRUE
 )
-
 FetchContent_MakeAvailable(nlohmann_json CLI11 ftxui)
 
-# ── System dependency: libcurl ─────────────────────────────────────────────────
 find_package(CURL REQUIRED)
 
-# ── Source files ───────────────────────────────────────────────────────────────
+# Optional: SQLite enables the SqlQuery tool.
+option(AGENTCPP_WITH_SQLITE "Enable embedded SQLite (SqlQuery tool)" ON)
+if(AGENTCPP_WITH_SQLITE)
+  find_package(SQLite3 QUIET)
+  if(SQLite3_FOUND)
+    add_compile_definitions(AGENTCPP_WITH_SQLITE)
+    message(STATUS "agentcpp: SQLite found - SqlQuery tool enabled")
+  else()
+    message(WARNING "agentcpp: SQLite not found - SqlQuery tool will report unavailable at runtime")
+    set(AGENTCPP_WITH_SQLITE OFF CACHE BOOL "" FORCE)
+  endif()
+endif()
+
 set(SOURCES
   src/main.cpp
   src/api/Types.cpp
+  src/api/Capabilities.cpp
   src/api/ClaudeClient.cpp
   src/agent/QueryEngine.cpp
+  src/agent/PlanGraph.cpp
+  src/agent/PlannerEngine.cpp
+  src/agent/Reflector.cpp
+  src/agent/Persona.cpp
   src/agent/SelfBelief.cpp
   src/agent/MetaController.cpp
   src/agent/CoTMonitor.cpp
@@ -65,8 +76,11 @@ set(SOURCES
   src/tools/GrepTool.cpp
   src/tools/SkillTool.cpp
   src/tools/MemoryTool.cpp
+  src/tools/WebTool.cpp
+  src/tools/DataTool.cpp
+  src/tools/DocTool.cpp
   src/skills/SkillRegistry.cpp
-  src/memory/MemoryStore.cpp        # deprecated empty TU; kept until file deletes are allowed
+  src/memory/MemoryStore.cpp
   src/memory/MemoryTypes.cpp
   src/memory/MemoryStorage.cpp
   src/memory/FactExtractor.cpp
@@ -110,13 +124,14 @@ target_link_libraries(agentcpp PRIVATE
   CURL::libcurl
 )
 
-# macOS: link against libc++ and frameworks
-if(APPLE)
-  target_link_libraries(agentcpp PRIVATE
-    "-framework CoreFoundation"
-  )
+if(AGENTCPP_WITH_SQLITE AND SQLite3_FOUND)
+  target_link_libraries(agentcpp PRIVATE SQLite::SQLite3)
 endif()
 
+if(APPLE)
+  target_link_libraries(agentcpp PRIVATE "-framework CoreFoundation")
+endif()
 
-# ── Install ──
 install(TARGETS agentcpp DESTINATION bin)
+install(DIRECTORY personas/ DESTINATION share/agentcpp/personas
+        FILES_MATCHING PATTERN "*.yaml")

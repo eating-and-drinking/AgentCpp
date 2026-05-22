@@ -6,13 +6,13 @@ namespace agentcpp::tools {
 class BashTool : public Tool {
 public:
     std::string name()        const override { return "Bash"; }
+    std::string category()    const override { return "code"; }
     std::string description() const override;
     json        inputSchema() const override;
 
     ToolCallResult execute(const json& input, const ToolContext& ctx) override;
 
 private:
-    // Run the command, capturing stdout/stderr with a timeout
     struct ExecResult {
         std::string stdout_output;
         std::string stderr_output;

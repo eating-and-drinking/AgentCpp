@@ -1,6 +1,8 @@
 #include <CLI/CLI.hpp>
 #include <api/ClaudeClient.hpp>
 #include <agent/QueryEngine.hpp>
+#include <agent/Persona.hpp>
+#include <api/Capabilities.hpp>
 #include <tools/Tool.hpp>
 #include <tools/BashTool.hpp>
 #include <tools/FileReadTool.hpp>
@@ -10,6 +12,9 @@
 #include <tools/GrepTool.hpp>
 #include <tools/SkillTool.hpp>
 #include <tools/MemoryTool.hpp>
+#include <tools/WebTool.hpp>
+#include <tools/DataTool.hpp>
+#include <tools/DocTool.hpp>
 #include <skills/SkillRegistry.hpp>
 #include <memory/MemoryEngine.hpp>
 #include <tools/McpTool.hpp>
@@ -24,19 +29,47 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <sstream>
+#include <fstream>
 
 // ── Tool registration ─────────────────────────────────────────────────────────
-static void registerAllTools(agentcpp::tools::ToolRegistry& reg) {
+// We register every tool we can construct. The QueryEngine then filters by the
+// active persona's toolsets at runtime — so even though every persona shares
+// the same registry, the model sees only its persona's tools.
+static void registerAllTools(agentcpp::tools::ToolRegistry& reg,
+                             const agentcpp::skills::SkillRegistry* skills) {
+    // core / files / code
     reg.registerTool(std::make_shared<agentcpp::tools::BashTool>());
     reg.registerTool(std::make_shared<agentcpp::tools::FileReadTool>());
     reg.registerTool(std::make_shared<agentcpp::tools::FileWriteTool>());
     reg.registerTool(std::make_shared<agentcpp::tools::FileEditTool>());
     reg.registerTool(std::make_shared<agentcpp::tools::GlobTool>());
     reg.registerTool(std::make_shared<agentcpp::tools::GrepTool>());
+
+    // web
+    reg.registerTool(std::make_shared<agentcpp::tools::WebFetchTool>());
+    reg.registerTool(std::make_shared<agentcpp::tools::WebSearchTool>());
+
+    // data
+    reg.registerTool(std::make_shared<agentcpp::tools::CsvReadTool>());
+    reg.registerTool(std::make_shared<agentcpp::tools::CsvWriteTool>());
+    reg.registerTool(std::make_shared<agentcpp::tools::SqlQueryTool>());
+    reg.registerTool(std::make_shared<agentcpp::tools::ChartTool>());
+
+    // doc (shell-out to skill scripts; tools are registered unconditionally
+    // and report a friendly error at call time if python3 or the skill is
+    // missing — see DocTool.cpp::dispatch())
+    reg.registerTool(std::make_shared<agentcpp::tools::DocxReadTool>(skills));
+    reg.registerTool(std::make_shared<agentcpp::tools::DocxWriteTool>(skills));
+    reg.registerTool(std::make_shared<agentcpp::tools::PdfReadTool>(skills));
+    reg.registerTool(std::make_shared<agentcpp::tools::XlsxReadTool>(skills));
+    reg.registerTool(std::make_shared<agentcpp::tools::XlsxWriteTool>(skills));
+    reg.registerTool(std::make_shared<agentcpp::tools::PptxReadTool>(skills));
+    reg.registerTool(std::make_shared<agentcpp::tools::PptxWriteTool>(skills));
 }
 
 int main(int argc, char** argv) {
-    CLI::App cli{"Claude Code (C++) — high-performance AI coding agent"};
+    CLI::App cli{"agentcpp — Universal Agent Runtime in C++20"};
     cli.set_version_flag("--version,-v", "1.0.0");
 
     // ── CLI flags ─────────────────────────────────────────────────────────────
@@ -61,6 +94,21 @@ int main(int argc, char** argv) {
     std::string skills_dir_override;
     std::string memory_dir_override;
     std::vector<std::string> extra_skill_dirs;
+    // ── Persona ───────────────────────────────────────────────────────────────
+    // Empty means "use the legacy default" (coder, for backwards compatibility
+    // with the pre-persona behavior). Persona subcommands set this explicitly.
+    std::string persona_id;
+    std::string persona_dir_override;
+    bool        list_personas = false;
+    std::vector<std::string> enable_toolsets;
+    std::vector<std::string> disable_toolsets;
+    bool        list_toolsets = false;
+    std::vector<std::string> attachments;
+    bool plan_flag = false;
+    bool no_plan_flag = false;
+    bool plan_only_flag = false;
+    int  max_plan_steps_arg = 12;
+    int  reflect_every_arg = 4;
 
     cli.add_option("-p,--print", print_prompt,
         "Run in headless/print mode with this prompt (non-interactive)");
@@ -104,8 +152,83 @@ int main(int argc, char** argv) {
         "List MCP servers + their tools and exit");
     cli.add_flag("--computer-use", computer_use_beta,
         "Send anthropic-beta: computer-use header (lets the model see screenshots)");
+    cli.add_option("--persona", persona_id,
+        "Persona id: general | researcher | office | data | coder (default: coder)");
+    cli.add_option("--persona-dir", persona_dir_override,
+        "Directory of *.yaml persona overlays (default: ~/.agentcpp/personas)");
+    cli.add_flag("--list-personas", list_personas,
+        "List available personas and exit");
+    cli.add_option("--toolset", enable_toolsets,
+        "Additionally enable a tool group (repeatable: core/files/code/web/doc/data/memory/computer/mcp)");
+    cli.add_option("--disable-toolset", disable_toolsets,
+        "Disable a tool group for this run (repeatable)");
+    cli.add_option("--attach", attachments, "Attach a file to the first user message (auto-detected by MIME). Repeatable.")->check(CLI::ExistingFile);
+    cli.add_flag("--plan", plan_flag, "Always run the Planner before acting");
+    cli.add_flag("--no-plan", no_plan_flag, "Skip the Planner phase");
+    cli.add_flag("--plan-only", plan_only_flag, "Produce the plan and exit without acting");
+    cli.add_option("--max-plan-steps", max_plan_steps_arg, "Maximum number of plan steps (default 12)");
+    cli.add_option("--reflect-every", reflect_every_arg, "Run the Reflector every N turns (0 disables; default 4)");
+    cli.add_flag("--list-toolsets", list_toolsets,
+        "List tool groups and what's in each, then exit");
+
+    // ── Persona subcommands ───────────────────────────────────────────────────
+    // `agentcpp researcher -p "..."` is sugar for `agentcpp --persona researcher -p "..."`.
+    // We register one subcommand per builtin id; YAML overlays added later are not
+    // exposed as subcommands (they remain reachable via --persona <id>).
+    //
+    // fallthrough() lets parent flags like -p / --model appear AFTER the
+    // subcommand on the command line. Without it CLI11 binds remaining args
+    // to the subcommand, which has none of those options registered.
+    {
+        agentcpp::agent::PersonaRegistry tmp_reg;
+        for (const auto& p : tmp_reg.all()) {
+            auto* sub = cli.add_subcommand(p.id, p.display_name);
+            sub->callback([&, id = p.id]{ persona_id = id; });
+            sub->fallthrough();
+        }
+    }
+
+    // ── PR4: dedicated `plan` subcommand ─────────────────────────────
+    {
+        auto* sub = cli.add_subcommand("plan", "Produce a plan and exit (no execution).");
+        sub->callback([&]{ plan_only_flag = true; });
+        sub->fallthrough();
+    }
 
     CLI11_PARSE(cli, argc, argv);
+
+    // ── Persona registry ──────────────────────────────────────────────────────
+    // Constructed early so --list-personas can run before any API key is required.
+    agentcpp::agent::PersonaRegistry persona_reg;
+    {
+        auto dir = persona_dir_override.empty()
+                       ? agentcpp::agent::PersonaRegistry::defaultPersonaDir()
+                       : std::filesystem::path(persona_dir_override);
+        persona_reg.loadFromDir(dir);
+    }
+    if (list_personas) {
+        std::cout << "Available personas: " << persona_reg.size() << "\n\n";
+        for (const auto& p : persona_reg.all()) {
+            std::cout << "  " << p.oneLineSummary() << "\n";
+            if (!p.toolsets.empty()) {
+                std::cout << "    toolsets: ";
+                for (std::size_t i = 0; i < p.toolsets.size(); ++i)
+                    std::cout << (i ? ", " : "") << p.toolsets[i];
+                std::cout << "\n";
+            }
+            std::cout << "\n";
+        }
+        return 0;
+    }
+
+    // Backward compatibility: when no persona is selected, default to "coder",
+    // which mirrors the pre-persona system prompt and toolset.
+    if (persona_id.empty()) persona_id = "coder";
+    if (!persona_reg.find(persona_id)) {
+        std::cerr << "Error: unknown persona '" << persona_id << "'. "
+                  << "Run with --list-personas to see options.\n";
+        return 1;
+    }
 
     // ── Load configuration ────────────────────────────────────────────────────
     auto& cfg = agentcpp::utils::Config::instance();
@@ -153,15 +276,14 @@ int main(int argc, char** argv) {
         memory_root = memory_dir_override;
     } else if (!cfg.memoryDir().empty()) {
         memory_root = cfg.memoryDir();
-    } // else: MemoryEngine picks its own default
+    }
 
     agentcpp::memory::MemoryEngine memory_engine(memory_root, /*create=*/memory_enabled);
 
     // ── Register tools ──────────────────────────────────────────────────────────────
     auto& registry = agentcpp::tools::ToolRegistry::instance();
-    registerAllTools(registry);
+    registerAllTools(registry, (skill_reg.size() > 0) ? &skill_reg : nullptr);
 
-    // Skill tool only if there's at least one skill loaded
     if (skill_reg.size() > 0) {
         registry.registerTool(std::make_shared<agentcpp::tools::SkillTool>(skill_reg));
     }
@@ -205,6 +327,24 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (list_toolsets) {
+        std::cout << "Tool groups\n\n";
+        const auto* p = persona_reg.find(persona_id);
+        if (p) {
+            std::cout << "Active persona '" << p->id << "' enables: ";
+            for (std::size_t i = 0; i < p->toolsets.size(); ++i)
+                std::cout << (i ? ", " : "") << p->toolsets[i];
+            std::cout << "\n\n";
+        }
+        for (const auto& g : registry.listGroups()) {
+            auto names = registry.toolsInGroup(g);
+            std::cout << "  " << g << " (" << names.size() << ")\n";
+            for (const auto& n : names) std::cout << "    - " << n << "\n";
+            std::cout << "\n";
+        }
+        return 0;
+    }
+
     if (effective_api_key.empty()) {
         std::cerr << "Error: No API key found.\n";
         return 1;
@@ -226,10 +366,6 @@ int main(int argc, char** argv) {
     client_cfg.computer_use_beta = computer_use_beta;
     auto client = std::make_shared<agentcpp::api::ClaudeClient>(std::move(client_cfg));
 
-    // Upgrade memory providers now that the Claude client exists. The
-    // factory inspects ANTHROPIC_API_KEY / AGENTCPP_MEMORY_LLM /
-    // AGENTCPP_MEMORY_EMBED_* and falls back to heuristics for any slot it
-    // can't fill.
     if (memory_enabled && memory_engine.isReady()) {
         memory_engine.setProviders(agentcpp::memory::makeProvidersFromEnv(client));
         LOG_DEBUG("memory providers: fact=" + memory_engine.factExtractorName()
@@ -238,7 +374,6 @@ int main(int argc, char** argv) {
                   + " reflect=" + memory_engine.reflectComposerName());
     }
 
-    // Task tool (needs client; channel tools don't)
     registry.registerTool(std::make_shared<agentcpp::tools::TaskTool>(
         client, registry, effective_model, effective_max_tokens, max_turns));
 
@@ -254,13 +389,22 @@ int main(int argc, char** argv) {
     };
 
     agentcpp::agent::QueryConfig query_cfg;
-    query_cfg.model         = effective_model;
-    query_cfg.max_tokens    = effective_max_tokens;
-    query_cfg.max_turns     = max_turns;
-    query_cfg.system_prompt = system_prompt;
-    query_cfg.auto_approve  = auto_approve;
-    query_cfg.headless      = !print_prompt.empty();
-    query_cfg.tool_ctx      = tool_ctx;
+    query_cfg.model            = effective_model;
+    query_cfg.max_tokens       = effective_max_tokens;
+    query_cfg.max_turns        = max_turns;
+    query_cfg.system_prompt    = system_prompt;
+    query_cfg.persona_id       = persona_id;
+    query_cfg.enable_toolsets  = enable_toolsets;
+    query_cfg.disable_toolsets = disable_toolsets;
+    using PM = agentcpp::agent::QueryConfig::PlanMode;
+    if (plan_only_flag)      query_cfg.plan_mode = PM::Only;
+    else if (no_plan_flag)   query_cfg.plan_mode = PM::Never;
+    else if (plan_flag)      query_cfg.plan_mode = PM::Always;
+    query_cfg.max_plan_steps = max_plan_steps_arg;
+    query_cfg.reflect_every  = reflect_every_arg;
+    query_cfg.auto_approve     = auto_approve;
+    query_cfg.headless         = !print_prompt.empty();
+    query_cfg.tool_ctx         = tool_ctx;
 
     agentcpp::tui::AppConfig app_cfg;
     app_cfg.query          = query_cfg;
@@ -269,6 +413,98 @@ int main(int argc, char** argv) {
     app_cfg.skills         = (skill_reg.size() > 0) ? &skill_reg : nullptr;
     app_cfg.memory         = (memory_enabled && memory_engine.isReady())
                                  ? &memory_engine : nullptr;
+    app_cfg.personas       = &persona_reg;
+
+    // ── PR3: convert --attach paths to ContentBlocks ──────────────────
+    // MIME inferred from extension. We base64-encode the file body and
+    // build the appropriate block. .csv goes via DataBlock (parsed).
+    if (!attachments.empty()) {
+        auto mimeFromExt = [](const std::filesystem::path& p) -> std::string {
+            auto e = p.extension().string();
+            for (auto& c : e) c = std::tolower((unsigned char)c);
+            if (e == ".png")  return "image/png";
+            if (e == ".jpg" || e == ".jpeg") return "image/jpeg";
+            if (e == ".webp") return "image/webp";
+            if (e == ".gif")  return "image/gif";
+            if (e == ".mp3")  return "audio/mp3";
+            if (e == ".wav")  return "audio/wav";
+            if (e == ".ogg")  return "audio/ogg";
+            if (e == ".pdf")  return "application/pdf";
+            if (e == ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            if (e == ".csv")  return "text/csv";
+            if (e == ".tsv")  return "text/tab-separated-values";
+            if (e == ".json") return "application/json";
+            if (e == ".txt" || e == ".md") return "text/plain";
+            return "application/octet-stream";
+        };
+        auto base64Encode = [](const std::string& bytes) -> std::string {
+            static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string out; out.reserve(((bytes.size() + 2) / 3) * 4);
+            for (std::size_t i = 0; i < bytes.size(); i += 3) {
+                unsigned a = (unsigned char)bytes[i];
+                unsigned b = i + 1 < bytes.size() ? (unsigned char)bytes[i+1] : 0;
+                unsigned c = i + 2 < bytes.size() ? (unsigned char)bytes[i+2] : 0;
+                unsigned trip = (a << 16) | (b << 8) | c;
+                out.push_back(tbl[(trip >> 18) & 0x3F]);
+                out.push_back(tbl[(trip >> 12) & 0x3F]);
+                out.push_back(i + 1 < bytes.size() ? tbl[(trip >> 6) & 0x3F] : '=');
+                out.push_back(i + 2 < bytes.size() ? tbl[trip & 0x3F]        : '=');
+            }
+            return out;
+        };
+        auto readBytes = [](const std::filesystem::path& p) -> std::string {
+            std::ifstream f(p, std::ios::binary);
+            std::stringstream b; b << f.rdbuf(); return b.str();
+        };
+
+        for (const auto& path_str : attachments) {
+            std::filesystem::path path(path_str);
+            std::string mime = mimeFromExt(path);
+            std::string bytes = readBytes(path);
+            if (mime.rfind("image/", 0) == 0) {
+                agentcpp::api::ImageBlock blk;
+                blk.media_type = mime;
+                blk.data       = base64Encode(bytes);
+                app_cfg.attachments.push_back(std::move(blk));
+            } else if (mime.rfind("audio/", 0) == 0) {
+                agentcpp::api::AudioBlock blk;
+                blk.media_type = mime;
+                blk.data       = base64Encode(bytes);
+                app_cfg.attachments.push_back(std::move(blk));
+            } else if (mime == "application/pdf" || mime.find("officedocument") != std::string::npos) {
+                agentcpp::api::DocumentBlock blk;
+                blk.media_type = mime;
+                blk.filename   = path.filename().string();
+                blk.data       = base64Encode(bytes);
+                app_cfg.attachments.push_back(std::move(blk));
+            } else if (mime == "text/csv" || mime == "text/tab-separated-values") {
+                // Parse minimally — DataBlock content holds {columns, rows}
+                agentcpp::api::DataBlock blk;
+                blk.schema_id = "table/csv";
+                blk.caption   = path.filename().string();
+                std::stringstream ss(bytes);
+                std::string line;
+                nlohmann::json cols = nlohmann::json::array();
+                nlohmann::json rows = nlohmann::json::array();
+                bool first = true;
+                char delim = (mime == "text/tab-separated-values") ? '\t' : ',;
+                while (std::getline(ss, line)) {
+                    nlohmann::json row = nlohmann::json::array();
+                    std::stringstream ls(line);
+                    std::string cell;
+                    while (std::getline(ls, cell, delim)) row.push_back(cell);
+                    if (first) { cols = row; first = false; } else { rows.push_back(row); }
+                }
+                blk.content = { {"columns", cols}, {"rows", rows} };
+                app_cfg.attachments.push_back(std::move(blk));
+            } else {
+                // Generic text: dump body as a TextBlock
+                agentcpp::api::TextBlock blk;
+                blk.text = "[Attached file: " + path.filename().string() + "]\n" + bytes;
+                app_cfg.attachments.push_back(std::move(blk));
+            }
+        }
+    }
 
     agentcpp::tui::App app(client, registry, app_cfg);
     if (!print_prompt.empty()) return app.runHeadless(print_prompt);

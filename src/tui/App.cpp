@@ -36,8 +36,10 @@ App::App(
   , impl_(std::make_unique<FtxuiImpl>())
 {
     // Wire optional subsystems into the engine for system-prompt injection
-    engine_.setSkillRegistry(config_.skills);
-    engine_.setMemoryEngine (config_.memory);
+    engine_.setSkillRegistry  (config_.skills);
+    engine_.setMemoryEngine   (config_.memory);
+    engine_.setPersonaRegistry(config_.personas);
+    if (!config_.attachments.empty()) engine_.setPendingAttachments(std::move(config_.attachments));
 
     engine_.setEventCallback([this](const AgentEvent& ev) {
         handleEvent(ev);
@@ -334,7 +336,8 @@ int App::runHeadless(const std::string& prompt) {
     });
 
     engine_.runTurn(conversation_, prompt, config_.query);
-    std::cout << "\n";
+    engine_.runTurn(conversation_, prompt, config_.query);
+    std::cout << std::endl;
     return 0;
 }
 
