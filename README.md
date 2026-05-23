@@ -46,7 +46,7 @@ All other dependencies (nlohmann/json, CLI11, FTXUI) are fetched automatically b
 ### Compile
 
 ```bash
-git clone <this-repo> agentcpp
+git clone https://github.com/eating-and-drinking/AgentCpp.git agentcpp
 cd agentcpp
 
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -535,6 +535,12 @@ MERIT's `MetaController` still makes per-iteration act/reflect/decompose
 decisions on heuristic grounds; the new `Reflector` provides the
 explicit prompt-driven reflection path and writes durable propositions
 back into MERIT's `SelfModelStore`. The two coexist.
+
+## Author
+
+Created and maintained by [eating-and-drinking](https://github.com/eating-and-drinking).
+
+Repository: [https://github.com/eating-and-drinking/AgentCpp](https://github.com/eating-and-drinking/AgentCpp)
 
 ## License
 

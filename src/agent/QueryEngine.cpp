@@ -110,7 +110,7 @@ std::string QueryEngine::buildSystemPrompt(const QueryConfig& cfg) const {
     } else if (persona) {
         ss << persona->toSystemPromptSection() << "\n";
     } else {
-        ss << "You are an AI coding assistant running as a command-line tool.\n\n"
+        ss << "You are a general-purpose agent running as a command-line tool.\n\n"
               "Use the available tools to help the user. Be concise.\n";
     }
 
